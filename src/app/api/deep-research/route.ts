@@ -4,9 +4,9 @@ import Anthropic from '@anthropic-ai/sdk';
 
 const BASE_URL = "http://ec2-3-37-235-10.ap-northeast-2.compute.amazonaws.com:8888/api/v1/market-trends";
 
-// API keys (for demo - replace with your actual keys)
-const OPENAI_API_KEY = "your-openai-api-key-here";
-const ANTHROPIC_API_KEY = "your-anthropic-api-key-here";
+// API keys (replace with your actual keys)
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "your-openai-api-key-here";
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "your-anthropic-api-key-here";
 
 const openai = new OpenAI({
   apiKey: OPENAI_API_KEY,
@@ -19,12 +19,33 @@ const anthropic = new Anthropic({
 interface DeepResearchRequest {
   query: string;
   limit?: number;
-  step?: 'search' | 'analyze' | 'visualize';
+  step?: 'planning' | 'execute' | 'synthesize';
   search_country?: string[];
   data_provider?: string[];
   filter_year?: number;
   filter_month?: number;
   filter_recent_months?: number;
+  todoIndex?: number; // 실행할 특정 todo 인덱스
+  todos?: ResearchTodo[]; // 계획된 todos
+  executedResults?: ExecutedResult[]; // 실행된 결과들
+}
+
+interface ResearchTodo {
+  id: string;
+  title: string;
+  description: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'failed';
+  subQuery: string; // 이 할 일을 위한 구체적인 검색 쿼리
+  priority: number; // 우선순위 (1-5)
+  estimatedTime: string; // 예상 소요 시간
+}
+
+interface ExecutedResult {
+  todoId: string;
+  status: 'success' | 'failed';
+  data: any; // 검색 결과 또는 분석 결과
+  insights: string; // 이 단계에서 얻은 핵심 인사이트
+  evidence: string[]; // 근거 자료들
 }
 
 interface PageSearchResult {
@@ -227,6 +248,317 @@ async function downloadImageAsBase64(url: string): Promise<string | null> {
   } catch (error) {
     console.error(`[DOWNLOAD] Failed to download image: ${url}`, error);
     return null;
+  }
+}
+
+// AI Agent Planning - 질문을 분석하여 할 일 목록 생성
+async function createResearchPlan(query: string): Promise<ResearchTodo[]> {
+  try {
+    console.log(`[PLANNING] Creating research plan for: ${query}`);
+    
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        {
+          role: "user",
+          content: `다음 질문을 해결하기 위해 체계적인 연구 계획을 세워주세요.
+
+질문: "${query}"
+
+요구사항:
+1. 질문을 해결하기 위해 필요한 하위 조사 항목들을 분석
+2. 각 조사 항목을 구체적인 할 일(Todo)로 분해
+3. 우선순위와 예상 소요시간 설정
+4. 각 할 일에 대한 구체적인 검색 쿼리 제안
+
+다음 JSON 형식으로 응답해주세요:
+[
+  {
+    "id": "todo-1",
+    "title": "시장 규모 조사",
+    "description": "전체 시장 규모와 성장률 데이터 수집",
+    "subQuery": "시장 규모 성장률 전망",
+    "priority": 5,
+    "estimatedTime": "2-3분"
+  },
+  {
+    "id": "todo-2", 
+    "title": "경쟁사 분석",
+    "description": "주요 경쟁사들의 시장 점유율과 전략 분석",
+    "subQuery": "경쟁사 시장점유율 전략",
+    "priority": 4,
+    "estimatedTime": "3-4분"
+  }
+]
+
+주의사항:
+- 최대 5개의 할 일로 제한
+- priority는 1-5 (5가 가장 중요)
+- 실제 검색 가능한 키워드로 subQuery 작성
+- JSON만 반환하고 다른 텍스트는 포함하지 마세요`
+        }
+      ],
+      max_tokens: 1500,
+      temperature: 0.3
+    });
+
+    const planText = completion.choices[0]?.message?.content || "[]";
+    console.log(`[PLANNING] GPT-4o plan response:`, planText);
+    
+    try {
+      const todos: ResearchTodo[] = JSON.parse(planText).map((todo: any) => ({
+        ...todo,
+        status: 'pending' as const
+      }));
+      
+      console.log(`[PLANNING] Created ${todos.length} research todos`);
+      return todos;
+    } catch (parseError) {
+      console.error('[PLANNING] Failed to parse GPT response, creating default plan');
+      // 파싱 실패시 기본 플랜 반환
+      return [
+        {
+          id: "todo-1",
+          title: "핵심 데이터 수집",
+          description: "질문과 관련된 핵심 데이터와 정보 수집",
+          subQuery: query,
+          priority: 5,
+          estimatedTime: "2-3분",
+          status: 'pending' as const
+        },
+        {
+          id: "todo-2",
+          title: "트렌드 분석",
+          description: "시장 트렌드와 패턴 분석",
+          subQuery: `${query} 트렌드 전망`,
+          priority: 4,
+          estimatedTime: "3-4분",
+          status: 'pending' as const
+        },
+        {
+          id: "todo-3",
+          title: "인사이트 도출",
+          description: "수집된 데이터로부터 실무 인사이트 도출",
+          subQuery: `${query} 인사이트 전략`,
+          priority: 3,
+          estimatedTime: "2-3분",
+          status: 'pending' as const
+        }
+      ];
+    }
+  } catch (error) {
+    console.error('[PLANNING] Error creating research plan:', error);
+    throw new Error('연구 계획 수립 중 오류가 발생했습니다.');
+  }
+}
+
+// 개별 할 일 실행
+async function executeTodo(
+  todo: ResearchTodo, 
+  filterParams: any,
+  limit: number = 5
+): Promise<ExecutedResult> {
+  try {
+    console.log(`[EXECUTE] Starting todo: ${todo.title}`);
+    
+    // 1. 세그먼트 검색
+    const segments = await searchSegments(todo.subQuery, limit, filterParams);
+    console.log(`[EXECUTE] Found ${segments.length} segments for todo: ${todo.title}`);
+    
+    if (segments.length === 0) {
+      return {
+        todoId: todo.id,
+        status: 'failed',
+        data: null,
+        insights: `"${todo.subQuery}" 관련 데이터를 찾을 수 없습니다.`,
+        evidence: []
+      };
+    }
+    
+    // 2. 이미지 URL 수집
+    const imagePromises = segments.slice(0, 3).map(async (segment): Promise<ImageResult | null> => {
+      try {
+        const pageInfo = await getPageInfo(segment.page_id);
+        if (!pageInfo) return null;
+        
+        const imageUrl = await getImageUrl(segment.file_id, pageInfo.page);
+        const fileMetadata = await getFileMetadata(segment.file_id);
+        
+        if (imageUrl) {
+          return {
+            file_id: segment.file_id,
+            page: pageInfo.page,
+            url: imageUrl,
+            title: segment.title,
+            filename: fileMetadata?.name || fileMetadata?.filename
+          };
+        }
+        return null;
+      } catch {
+        return null;
+      }
+    });
+    
+    const imageResults = await Promise.all(imagePromises);
+    const validImages = imageResults.filter((img): img is ImageResult => img !== null);
+    
+    // 3. 세그먼트 데이터 분석
+    const segmentData = segments.map((segment, index) => {
+      const data = [];
+      if (segment.title) data.push(`제목: ${segment.title}`);
+      if (segment.description) data.push(`설명: ${segment.description}`);
+      if (segment.marketing_insight) data.push(`마케팅 인사이트: ${segment.marketing_insight}`);
+      if (segment.markdown) data.push(`상세 내용: ${segment.markdown}`);
+      
+      return data.length > 0 ? `[문서 ${index + 1}]\n${data.join('\n')}` : null;
+    }).filter(data => data !== null);
+    
+    // 4. GPT-4o로 이 단계의 인사이트 도출
+    let insights = "";
+    if (segmentData.length > 0) {
+      const combinedData = segmentData.join('\n\n--- 다음 문서 ---\n\n');
+      
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          {
+            role: "user",
+            content: `다음은 "${todo.title}" 조사를 위해 수집된 데이터입니다.
+
+조사 목적: ${todo.description}
+검색 쿼리: ${todo.subQuery}
+
+문서 정보:
+${combinedData}
+
+이 데이터로부터 핵심 인사이트를 간결하게 도출해주세요:
+1. 핵심 발견사항 (3-5개 bullet point)
+2. 주요 수치나 데이터
+3. 이 조사 단계의 결론
+
+한국어로 간결하고 명확하게 작성해주세요.`
+          }
+        ],
+        max_tokens: 800,
+        temperature: 0.2
+      });
+      
+      insights = completion.choices[0]?.message?.content || "분석 결과를 가져올 수 없습니다.";
+    } else {
+      insights = `${todo.title}: 관련 문서를 찾았지만 상세 분석 데이터가 없습니다.`;
+    }
+    
+    return {
+      todoId: todo.id,
+      status: 'success',
+      data: {
+        segments: segments,
+        images: validImages,
+        segmentCount: segments.length
+      },
+      insights: insights,
+      evidence: segmentData.map((_, index) => `문서 ${index + 1}: ${segments[index]?.title || '제목 없음'}`)
+    };
+    
+  } catch (error) {
+    console.error(`[EXECUTE] Error executing todo ${todo.title}:`, error);
+    return {
+      todoId: todo.id,
+      status: 'failed',
+      data: null,
+      insights: `${todo.title} 실행 중 오류가 발생했습니다: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      evidence: []
+    };
+  }
+}
+
+// 최종 종합 분석
+async function synthesizeResults(query: string, executedResults: ExecutedResult[]): Promise<string> {
+  try {
+    console.log(`[SYNTHESIZE] Combining results from ${executedResults.length} executed todos`);
+    
+    const successfulResults = executedResults.filter(result => result.status === 'success');
+    
+    if (successfulResults.length === 0) {
+      return `"${query}" 질문에 대한 연구를 수행했지만, 충분한 데이터를 수집하지 못했습니다.
+
+## 연구 수행 결과
+- 총 ${executedResults.length}개의 조사 항목을 시도했습니다
+- 모든 조사에서 데이터 수집에 어려움이 있었습니다
+
+## 권장 사항
+- 검색 키워드를 더 구체적으로 조정해보세요
+- 필터 조건을 변경해보세요
+- 다른 관점에서 질문을 재구성해보세요`;
+    }
+    
+    // 모든 성공한 결과의 인사이트 결합
+    const allInsights = successfulResults.map((result, index) => 
+      `### 조사 ${index + 1}: ${result.todoId}\n${result.insights}`
+    ).join('\n\n');
+    
+    // 전체 증거 자료 수집
+    const allEvidence = successfulResults.flatMap(result => result.evidence);
+    const totalSegments = successfulResults.reduce((sum, result) => 
+      sum + (result.data?.segmentCount || 0), 0
+    );
+    
+    // GPT-4o로 최종 종합 분석
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        {
+          role: "user",
+          content: `다음은 "${query}" 질문을 해결하기 위해 단계별로 수행한 심층 연구 결과입니다.
+
+각 조사 단계별 결과:
+${allInsights}
+
+전체 수집 데이터:
+- 총 분석 문서: ${totalSegments}개
+- 성공한 조사 단계: ${successfulResults.length}개
+- 증거 자료: ${allEvidence.length}개
+
+이제 모든 조사 결과를 종합하여 원래 질문에 대한 최종 답변을 작성해주세요.
+
+다음 형식으로 한국어로 상세하게 답변해주세요:
+
+## 🎯 핵심 답변
+(질문에 대한 명확하고 직접적인 답변)
+
+## 📊 주요 발견사항
+(각 조사 단계에서 발견한 핵심 데이터와 사실들)
+
+## 💡 심층 인사이트
+(데이터 분석을 통해 도출한 깊이 있는 통찰)
+
+## 🔍 근거 자료
+(발견사항을 뒷받침하는 구체적인 근거들)
+
+## 📈 전략적 시사점
+(비즈니스나 실무에 적용할 수 있는 전략적 함의)
+
+## 🚀 실행 방안
+(구체적이고 실행 가능한 액션 아이템들)
+
+## ⚠️ 한계 및 추가 고려사항
+(이번 연구의 한계점과 추가로 고려해야 할 사항들)
+
+각 조사 단계에서 얻은 구체적인 데이터와 인사이트를 최대한 활용하여 포괄적이고 실용적인 답변을 제공해주세요.`
+        }
+      ],
+      max_tokens: 3000,
+      temperature: 0.3
+    });
+    
+    const finalAnalysis = completion.choices[0]?.message?.content || "최종 분석을 생성할 수 없습니다.";
+    console.log(`[SYNTHESIZE] Final synthesis completed`);
+    
+    return finalAnalysis;
+    
+  } catch (error) {
+    console.error('[SYNTHESIZE] Error in synthesis:', error);
+    throw new Error('최종 종합 분석 중 오류가 발생했습니다.');
   }
 }
 
@@ -497,125 +829,123 @@ export async function POST(request: NextRequest) {
 
     console.log(`[DEEP-RESEARCH] Query: "${query}", limit: ${limit}, step: ${step}`);
 
-    if (step === 'search') {
-      // Step 1: Segment search and return documents
-      console.log(`[DEEP-RESEARCH] Filters:`, filterParams);
-      const segments = await searchSegments(query.trim(), limit, filterParams);
-      console.log(`[DEEP-RESEARCH] Found segments: ${segments.length}`);
+    if (step === 'planning') {
+      // Step 1: AI Agent Planning - 질문 분석 및 할 일 목록 생성
+      console.log(`[DEEP-RESEARCH] Creating research plan for query: ${query}`);
+      
+      const todos = await createResearchPlan(query);
+      
+      return NextResponse.json({
+        step: 'planning',
+        todos: todos,
+        message: `Created ${todos.length} research todos`,
+        totalTodos: todos.length,
+        completedTodos: 0
+      });
 
-      if (segments.length === 0) {
+    } else if (step === 'execute') {
+      // Step 2: 개별 할 일 실행
+      const { todos, todoIndex, executedResults = [] } = body;
+      
+      if (!todos || !Array.isArray(todos) || todoIndex === undefined) {
+        return NextResponse.json(
+          { error: 'Todos and todoIndex are required for execution.' },
+          { status: 400 }
+        );
+      }
+
+      const todoToExecute = todos[todoIndex];
+      if (!todoToExecute) {
+        return NextResponse.json(
+          { error: 'Invalid todoIndex.' },
+          { status: 400 }
+        );
+      }
+
+      // 해당 할 일을 in_progress로 변경
+      const updatedTodos = todos.map((todo: ResearchTodo, index: number) => ({
+        ...todo,
+        status: index === todoIndex ? 'in_progress' as const : todo.status
+      }));
+
+      console.log(`[DEEP-RESEARCH] Executing todo ${todoIndex + 1}/${todos.length}: ${todoToExecute.title}`);
+      
+      try {
+        const result = await executeTodo(todoToExecute, filterParams, limit);
+        
+        // 실행 완료 후 상태 업데이트
+        const finalTodos = updatedTodos.map((todo: ResearchTodo, index: number) => ({
+          ...todo,
+          status: index === todoIndex ? (result.status === 'success' ? 'completed' as const : 'failed' as const) : todo.status
+        }));
+
+        const newExecutedResults = [...executedResults, result];
+        const completedCount = finalTodos.filter((t: ResearchTodo) => t.status === 'completed').length;
+        
         return NextResponse.json({
-          step: 'search',
-          images: [],
-          message: 'No related segments found.'
+          step: 'execute',
+          todos: finalTodos,
+          executedResults: newExecutedResults,
+          currentResult: result,
+          todoIndex: todoIndex,
+          totalTodos: todos.length,
+          completedTodos: completedCount,
+          isCompleted: completedCount === todos.length,
+          message: `Completed todo ${todoIndex + 1}/${todos.length}: ${todoToExecute.title}`
+        });
+        
+      } catch (error) {
+        // 실행 실패 시 상태 업데이트
+        const finalTodos = updatedTodos.map((todo: ResearchTodo, index: number) => ({
+          ...todo,
+          status: index === todoIndex ? 'failed' as const : todo.status
+        }));
+
+        const failedResult: ExecutedResult = {
+          todoId: todoToExecute.id,
+          status: 'failed',
+          data: null,
+          insights: `실행 중 오류가 발생했습니다: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          evidence: []
+        };
+
+        const newExecutedResults = [...executedResults, failedResult];
+        const completedCount = finalTodos.filter((t: ResearchTodo) => t.status === 'completed').length;
+        
+        return NextResponse.json({
+          step: 'execute',
+          todos: finalTodos,
+          executedResults: newExecutedResults,
+          currentResult: failedResult,
+          todoIndex: todoIndex,
+          totalTodos: todos.length,
+          completedTodos: completedCount,
+          isCompleted: completedCount === todos.length,
+          message: `Failed todo ${todoIndex + 1}/${todos.length}: ${todoToExecute.title}`
         });
       }
 
-      // Get file metadata and image URLs
-      const uniqueFileIds = [...new Set(segments.map(segment => segment.file_id))];
+    } else if (step === 'synthesize') {
+      // Step 3: 최종 종합 분석
+      const { executedResults } = body;
       
-      const fileMetadataPromises = uniqueFileIds.map(async (fileId) => {
-        const metadata = await getFileMetadata(fileId);
-        return { fileId, metadata };
-      });
-      
-      const fileMetadataResults = await Promise.all(fileMetadataPromises);
-      const fileMetadataMap = new Map();
-      fileMetadataResults.forEach(({ fileId, metadata }) => {
-        fileMetadataMap.set(fileId, metadata);
-      });
-
-      const imagePromises = segments.map(async (segment): Promise<ImageResult | null> => {
-        try {
-          // Get page info to get the actual page number
-          const pageInfo = await getPageInfo(segment.page_id);
-          if (!pageInfo) {
-            console.error(`[ERROR] Page info not found for page_id: ${segment.page_id}`);
-            return null;
-          }
-
-          const imageUrl = await getImageUrl(segment.file_id, pageInfo.page);
-          const fileMetadata = fileMetadataMap.get(segment.file_id);
-          
-          if (imageUrl) {
-            return {
-              file_id: segment.file_id,
-              page: pageInfo.page,
-              url: imageUrl,
-              title: segment.title,
-              filename: fileMetadata?.name || fileMetadata?.filename
-            };
-          }
-          return null;
-        } catch (error) {
-          console.error(`[ERROR] Image URL fetch failed (segment page_id: ${segment.page_id}):`, error);
-          return null;
-        }
-      });
-
-      const imageResults = await Promise.all(imagePromises);
-      const validImages = imageResults.filter((img): img is ImageResult => img !== null);
-
-      console.log(`[DEEP-RESEARCH] Valid images: ${validImages.length}`);
-
-      // segments에 page 정보 추가
-      const segmentsWithPageInfo = await Promise.all(segments.map(async (segment) => {
-        try {
-          const pageInfo = await getPageInfo(segment.page_id);
-          return {
-            ...segment,
-            page: pageInfo?.page // page 정보 추가
-          };
-        } catch (error) {
-          console.warn(`[WARNING] Page info fetch failed for segment ${segment.page_id}`);
-          return segment;
-        }
-      }));
-
-      return NextResponse.json({
-        step: 'search',
-        images: validImages,
-        segments: segmentsWithPageInfo, // page 정보가 포함된 segments 데이터 반환
-        total: validImages.length,
-        message: `Found ${validImages.length} related segments`
-      });
-
-    } else if (step === 'analyze') {
-      // Step 2: Analyze segments data with GPT-4o
-      const { segments } = body as any;
-      
-      if (!segments || !Array.isArray(segments)) {
+      if (!executedResults || !Array.isArray(executedResults)) {
         return NextResponse.json(
-          { error: 'Segments data is required for analysis.' },
+          { error: 'Executed results are required for synthesis.' },
           { status: 400 }
         );
       }
 
-      const gptAnalysis = await analyzeSegmentsWithGPT4o(query, segments);
-
-      return NextResponse.json({
-        step: 'analyze',
-        gptAnalysis,
-        message: 'AI analysis completed'
-      });
-
-    } else if (step === 'visualize') {
-      // Step 3: Generate visualization
-      const { gptAnalysis } = body as any;
+      console.log(`[DEEP-RESEARCH] Synthesizing results from ${executedResults.length} executed todos`);
       
-      if (!gptAnalysis) {
-        return NextResponse.json(
-          { error: 'GPT analysis is required for visualization.' },
-          { status: 400 }
-        );
-      }
-
-      const visualizationCode = await generateVisualizationWithClaude(query, gptAnalysis);
+      const finalAnalysis = await synthesizeResults(query, executedResults);
+      const visualizationCode = await generateVisualizationWithClaude(query, finalAnalysis);
 
       return NextResponse.json({
-        step: 'visualize',
-        visualizationCode,
-        message: 'Visualization code generated'
+        step: 'synthesize',
+        finalAnalysis: finalAnalysis,
+        visualizationCode: visualizationCode,
+        message: 'Deep research completed with final synthesis and visualization'
       });
     }
 

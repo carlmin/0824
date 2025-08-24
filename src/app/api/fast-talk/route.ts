@@ -3,8 +3,8 @@ import OpenAI from 'openai';
 
 const BASE_URL = "http://ec2-3-37-235-10.ap-northeast-2.compute.amazonaws.com:8888/api/v1/market-trends";
 
-// API keys (for demo - replace with your actual key)
-const OPENAI_API_KEY = "your-openai-api-key-here";
+// API keys (replace with your actual key)
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "your-openai-api-key-here";
 
 const openai = new OpenAI({
   apiKey: OPENAI_API_KEY,
