@@ -16,6 +16,7 @@ import axios from 'axios';
 import HighlightedImage from '@/components/HighlightedImage';
 import FileViewerModal from '@/components/FileViewerModal';
 import MarkdownRenderer from '@/components/MarkdownRenderer';
+import SimpleTodos, { SimpleTodo } from '@/components/ui/simple-todos';
 
 interface DocumentPage {
   file_id: string;
@@ -45,6 +46,38 @@ interface FastTalkResponse {
   visualizationCode: string;
   images: ImageResult[];
   total: number;
+  message: string;
+}
+
+interface ExecutedResult {
+  todoId: string;
+  status: 'success' | 'failed';
+  data: any;
+  insights: string;
+  evidence: string[];
+}
+
+interface ResearchTodo {
+  id: string;
+  title: string;
+  description: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'failed';
+  subQuery: string;
+  priority: number;
+  estimatedTime: string;
+}
+
+interface DeepResearchResponse {
+  step: 'planning' | 'execute' | 'synthesize';
+  todos?: ResearchTodo[];
+  executedResults?: ExecutedResult[];
+  currentResult?: ExecutedResult;
+  todoIndex?: number;
+  totalTodos?: number;
+  completedTodos?: number;
+  isCompleted?: boolean;
+  finalAnalysis?: string;
+  visualizationCode?: string;
   message: string;
 }
 
@@ -142,6 +175,21 @@ export default function Home() {
   // 디버깅용 실시간 상태
   const [debugLogs, setDebugLogs] = useState<string[]>([]);
   const [currentStep, setCurrentStep] = useState<string>('');
+
+  // Deep Research 관련 state
+  const [researchTodos, setResearchTodos] = useState<ResearchTodo[]>([]);
+  const [executedResults, setExecutedResults] = useState<ExecutedResult[]>([]);
+  const [currentTodoIndex, setCurrentTodoIndex] = useState<number>(-1);
+  const [researchProgress, setResearchProgress] = useState({
+    totalTodos: 0,
+    completedTodos: 0,
+    isCompleted: false
+  });
+  const [finalAnalysis, setFinalAnalysis] = useState<string>('');
+  
+  // 그래프 커스터마이징 관련 state
+  const [chartCustomization, setChartCustomization] = useState<string>('');
+  const [isRegeneratingChart, setIsRegeneratingChart] = useState<boolean>(false);
 
   // Filter states - 새로운 시스템
   const [selectedCountries, setSelectedCountries] = useState<string[]>(['ALL']);
@@ -603,87 +651,166 @@ export default function Home() {
     const limit = getSelectedAmount();
     const filterParams = getFilterParams();
     
-    // 디버깅 상태 초기화
+    // 상태 초기화
     setDebugLogs([]);
-    setCurrentStep('검색 시작');
-    addDebugLog('Deep Research 시작');
+    setCurrentStep('AI 에이전트 계획 수립 중...');
+    setResearchTodos([]);
+    setExecutedResults([]);
+    setCurrentTodoIndex(-1);
+    setFinalAnalysis('');
+    setVisualizationImage('');
+    
+    addDebugLog('🤖 Deep Research AI Agent 시작');
     
     try {
-      // Step 1: 문서 검색 및 즉시 표시
-      setCurrentStep('1/3: 문서 검색 중...');
-      addDebugLog(`검색 쿼리: "${query}", 문서 수: ${limit}`);
-      addDebugLog(`필터 조건: ${JSON.stringify(filterParams)}`);
+      // Step 1: AI Agent Planning
+      addDebugLog('📋 연구 계획 수립 중...');
+      setCurrentStep('1단계: AI가 연구 계획을 수립하고 있습니다...');
       
-      const searchResponse = await axios.post('/api/deep-research', {
+      const planningResponse = await axios.post('/api/deep-research', {
         query: query.trim(),
-        limit: limit,
-        step: 'search',
+        step: 'planning',
         ...filterParams
       });
 
-      addDebugLog(`문서 검색 완료: ${searchResponse.data.images.length}개 발견`);
-      setImages(searchResponse.data.images); // 즉시 문서들 표시
-      setSegments(searchResponse.data.segments || []); // segments 데이터 저장
-      
-      const imageUrls = searchResponse.data.images.map((img: ImageResult) => img.url);
-
-      // Step 2: GPT-4o 분석
-      setCurrentStep('2/3: AI 이미지 분석 중...');
-      addDebugLog('GPT-4o 이미지 분석 시작');
-      
-      const analyzeResponse = await axios.post('/api/deep-research', {
-        query: query.trim(),
-        step: 'analyze',
-        segments: searchResponse.data.segments
+      const todos: ResearchTodo[] = planningResponse.data.todos;
+      setResearchTodos(todos);
+      setResearchProgress({
+        totalTodos: todos.length,
+        completedTodos: 0,
+        isCompleted: false
       });
-
-      addDebugLog('GPT-4o 분석 완료');
-      const gptAnalysis = analyzeResponse.data.gptAnalysis;
       
-      // GPT 분석 결과 즉시 표시
+      addDebugLog(`✅ 연구 계획 완료: ${todos.length}개 할 일 생성`);
+      setCurrentStep(`2단계: ${todos.length}개 할 일을 순차적으로 실행합니다...`);
+      
+      // Step 2: 각 할 일을 순차적으로 실행
+      let currentResults: ExecutedResult[] = [];
+      
+      for (let i = 0; i < todos.length; i++) {
+        setCurrentTodoIndex(i);
+        const currentTodo = todos[i];
+        
+        addDebugLog(`🔍 할 일 ${i + 1}/${todos.length} 실행 중: ${currentTodo.title}`);
+        setCurrentStep(`${i + 1}/${todos.length}: ${currentTodo.title} 조사 중...`);
+        
+        const executeResponse = await axios.post('/api/deep-research', {
+          query: query.trim(),
+          step: 'execute',
+          todos: todos,
+          todoIndex: i,
+          executedResults: currentResults,
+          limit: Math.ceil(limit / todos.length), // 각 할 일마다 적절한 문서 수 배분
+          ...filterParams
+        });
+
+        // 상태 업데이트
+        const updatedTodos = executeResponse.data.todos;
+        setResearchTodos(updatedTodos);
+        
+        currentResults = executeResponse.data.executedResults;
+        setExecutedResults(currentResults);
+        
+        const completedCount = executeResponse.data.completedTodos;
+        setResearchProgress({
+          totalTodos: todos.length,
+          completedTodos: completedCount,
+          isCompleted: executeResponse.data.isCompleted
+        });
+        
+        addDebugLog(`✅ 할 일 ${i + 1} 완료: ${executeResponse.data.currentResult.status}`);
+        
+        // 각 단계 완료 시 잠시 대기 (사용자가 진행 상황을 볼 수 있도록)
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+      
+      // Step 3: 최종 종합 분석
+      setCurrentStep('3단계: 모든 조사 결과를 종합 분석 중...');
+      addDebugLog('🧠 최종 종합 분석 및 시각화 생성 중...');
+      
+      const synthesizeResponse = await axios.post('/api/deep-research', {
+        query: query.trim(),
+        step: 'synthesize',
+        executedResults: currentResults
+      });
+      
+      const finalAnalysisResult = synthesizeResponse.data.finalAnalysis;
+      const visualizationCode = synthesizeResponse.data.visualizationCode;
+      
+      setFinalAnalysis(finalAnalysisResult);
       setFastTalkResponse({
-        gptAnalysis: gptAnalysis,
-        visualizationCode: '',
-        images: searchResponse.data.images,
-        total: searchResponse.data.images.length,
-        message: 'AI 분석 완료'
+        gptAnalysis: finalAnalysisResult,
+        visualizationCode: visualizationCode,
+        images: [], // 각 단계의 이미지는 executedResults에 포함
+        total: currentResults.length,
+        message: '🎉 Deep Research 완료!'
       });
-
-      // Step 3: 시각화 생성
-      setCurrentStep('3/3: 시각화 그래프 생성 중...');
-      addDebugLog('Claude 시각화 코드 생성 시작');
       
-      const visualizeResponse = await axios.post('/api/deep-research', {
-        query: query.trim(),
-        step: 'visualize',
-        gptAnalysis: gptAnalysis
-      });
-
-      addDebugLog('Claude 시각화 코드 생성 완료');
-      const visualizationCode = visualizeResponse.data.visualizationCode;
-      
-      // 최종 결과 업데이트
-      setFastTalkResponse(prev => prev ? {
-        ...prev,
-        visualizationCode: visualizationCode
-      } : null);
-
-      // Python 코드 실행
+      // Python 시각화 실행
       if (visualizationCode) {
-        addDebugLog('Python 시각화 코드 실행 시작');
+        addDebugLog('📊 시각화 그래프 생성 중...');
         await generateVisualization(visualizationCode);
       }
-
-      setCurrentStep('완료');
-      addDebugLog('Deep Research 모든 단계 완료');
+      
+      setCurrentStep('✅ AI Agent Deep Research 완료!');
+      addDebugLog('🎉 모든 연구가 성공적으로 완료되었습니다!');
       
       toast({
-        description: `Deep Research 완료: ${searchResponse.data.images.length}개 문서 분석`,
+        description: `🤖 AI Agent Deep Research 완료: ${todos.length}개 조사 항목 완료`,
       });
+      
     } catch (error) {
-      setCurrentStep('오류 발생');
-      addDebugLog(`에러: ${error}`);
-      throw error;
+      setCurrentStep('❌ 오류 발생');
+      addDebugLog(`❌ 에러: ${error}`);
+      console.error('Deep Research error:', error);
+      toast({
+        variant: "destructive",
+        description: "Deep Research 중 오류가 발생했습니다.",
+      });
+    }
+  };
+
+  // 그래프만 재생성하는 함수
+  const regenerateChart = async () => {
+    if (!finalAnalysis || !chartCustomization.trim()) {
+      toast({
+        variant: "destructive",
+        description: "그래프 커스터마이징 요청을 입력해주세요.",
+      });
+      return;
+    }
+
+    setIsRegeneratingChart(true);
+    
+    try {
+      // Claude에게 커스터마이징된 시각화 코드 생성 요청
+      const customPrompt = `${finalAnalysis}\n\n사용자 요청: ${chartCustomization}`;
+      
+      const response = await axios.post('/api/deep-research', {
+        query: query.trim(),
+        step: 'synthesize', // 시각화만 다시 생성
+        executedResults: executedResults.map(result => ({
+          ...result,
+          insights: customPrompt // 커스터마이징 요청을 포함한 분석 결과
+        }))
+      });
+      
+      const customVisualizationCode = response.data.visualizationCode;
+      
+      if (customVisualizationCode) {
+        await generateVisualization(customVisualizationCode);
+        toast({
+          description: "그래프가 성공적으로 업데이트되었습니다!",
+        });
+      }
+    } catch (error) {
+      console.error('Chart regeneration error:', error);
+      toast({
+        variant: "destructive",
+        description: "그래프 생성 중 오류가 발생했습니다.",
+      });
+    } finally {
+      setIsRegeneratingChart(false);
     }
   };
 
@@ -1257,6 +1384,22 @@ export default function Home() {
           </div>
         )}
 
+        {/* Deep Research Progress Section */}
+        {activeTab === 'deep-research' && researchTodos.length > 0 && (
+          <div className="space-y-6">
+            <SimpleTodos
+              todos={researchTodos.map(todo => ({
+                id: todo.id,
+                title: todo.title,
+                status: todo.status
+              }))}
+              totalTodos={researchProgress.totalTodos}
+              completedTodos={researchProgress.completedTodos}
+              className="mx-auto max-w-md"
+            />
+          </div>
+        )}
+
         {/* Deep Research Results Section */}
         {activeTab === 'deep-research' && fastTalkResponse && (
           <div className="space-y-8">
@@ -1301,6 +1444,39 @@ export default function Home() {
                             </p>
                           </div>
                         </div>
+                      </div>
+                    )}
+                    
+                    {/* 그래프 커스터마이징 */}
+                    {visualizationImage && (
+                      <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg">
+                        <h4 className="font-medium text-blue-800 mb-3">그래프 커스터마이징</h4>
+                        <div className="flex gap-2">
+                          <Input
+                            value={chartCustomization}
+                            onChange={(e) => setChartCustomization(e.target.value)}
+                            placeholder="원하는 그래프 스타일이나 내용을 입력하세요 (예: 막대그래프로 변경, 색상을 파란색으로, 최근 3년 데이터만 표시)"
+                            className="flex-1"
+                            disabled={isRegeneratingChart}
+                          />
+                          <Button
+                            onClick={regenerateChart}
+                            disabled={isRegeneratingChart || !chartCustomization.trim()}
+                            className="whitespace-nowrap"
+                          >
+                            {isRegeneratingChart ? (
+                              <>
+                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                생성 중...
+                              </>
+                            ) : (
+                              "그래프 새로고침"
+                            )}
+                          </Button>
+                        </div>
+                        <p className="text-xs text-blue-600 mt-2">
+                          💡 분석 내용은 그대로 유지하고 그래프만 다시 생성됩니다
+                        </p>
                       </div>
                     )}
                     

@@ -715,40 +715,43 @@ print(image_base64)
         messages: [
           {
             role: "user",
-            content: `Please generate Python code to visualize data based on the following question and GPT-4o analysis results.
+            content: `Please generate Python code to create ONE focused and impactful visualization based on the following question and analysis.
 
 Question: "${query}"
 
-GPT-4o Analysis Results:
+Analysis Results:
 ${gptAnalysis}
 
 Requirements:
-1. Use matplotlib and seaborn for visualization
-2. Visualize key data points or trends mentioned in the analysis results
-3. DO NOT use Korean fonts - use English for all text (Korean fonts not available)
-4. Graph titles and labels should be in English
-5. Use professional and visually appealing colors
-6. Provide complete executable code
+1. Create ONLY ONE chart that best represents the most important finding from the analysis
+2. Focus on the key insight that would be most valuable to visualize
+3. Use proper year formatting (e.g., 2023, 2024, 2025 - not 2023.5)
+4. Use matplotlib with clean, professional styling
+5. English labels only (no Korean fonts)
+6. Make it business-ready and impactful
 
-Notes:
-- Generate reasonable sample data based on analysis results since actual data is not available
-- Code must be immediately executable
-- Include base64 encoding and print() output at the end
-- Required libraries: matplotlib, seaborn, pandas, numpy, base64, io
-- Convert graph to base64 string and output with print()
-- Example output format: print(base64_string)
-- IMPORTANT: Do not use any Korean font settings, use default matplotlib fonts
-- Use plt.style.use('default') for styling (avoid seaborn-v0_8 which may cause errors)
-- Do NOT use 'pad' parameter in suptitle() function
+Chart Selection Priority:
+- If there are trends over time -> Line chart with proper yearly labels
+- If there are comparisons -> Bar chart with clear categories  
+- If there are market shares -> Pie chart with percentages
+- If there are growth rates -> Bar chart showing percentage growth
+
+Technical Requirements:
+- Clean, minimal design with proper spacing
+- Professional color scheme (blues, greens, or corporate colors)
+- Clear title that explains what the chart shows
+- Proper axis labels and formatting
+- Include data labels where helpful
+- Use figsize=(10, 6) for good proportions
 
 Code structure:
-1. Import libraries
-2. NO font settings (use default)
-3. Generate sample data
-4. Create visualization with English labels
-5. Base64 encoding and output
+1. Import libraries (matplotlib, numpy, pandas)
+2. Generate realistic sample data based on analysis findings
+3. Create ONE impactful chart
+4. Professional styling and formatting
+5. Base64 encoding and print output
 
-Please provide only Python code (without python code blocks, just pure code).`
+Please provide only Python code (no code blocks, just pure code).`
           }
         ]
       });
